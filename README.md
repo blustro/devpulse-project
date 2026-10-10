@@ -28,5 +28,5 @@ Since this project has two independent parts (Backend and Frontend), you will ru
 
 1. Open terminal window #1 and navigate to your backend folder:
    ```bash
-   cd devpulse-backend
+   cd graphql-project
    ```
