@@ -1,10 +1,12 @@
-import 'dotenv/config';
-import pkg from '@prisma/client';
-const { PrismaClient } = pkg;
-import { PrismaPg } from '@prisma/adapter-pg';
 import { ApolloServer } from '@apollo/server';
 import { startStandaloneServer } from '@apollo/server/standalone';
-import DataLoader from 'dataloader'; // 👈 Import DataLoader
+import { PrismaPg } from '@prisma/adapter-pg';
+import pkg from '@prisma/client';
+import bcrypt from 'bcrypt';
+import DataLoader from 'dataloader';
+import 'dotenv/config';
+import jwt from 'jsonwebtoken';
+const { PrismaClient } = pkg;
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -52,13 +54,20 @@ const typeDefs = `
     assignee: User
   }
 
+  type AuthPayload {
+    token: String!
+    user: User!
+  }
+
   type Query {
     tasks: [Task!]!
     users: [User!]!
+    me: User
   }
 
   type Mutation {
-    createUser(name: String!, email: String!): User!
+    signup(name: String!, email: String!, password: String!): AuthPayload!
+    login(email: String!, password: String!): AuthPayload!
     createTask(title: String!, assigneeId: ID): Task!
     updateTaskStatus(id: ID!, status: TaskStatus!): Task!
   }
@@ -73,6 +82,11 @@ const resolvers = {
     users: async () => {
       console.log('👉 [Backend Log] Fetching all users from PostgreSQL...');
       return await prisma.user.findMany();
+    },
+    // Protected query to get the currently logged-in user
+    me: async (_, __, { user }) => {
+      if (!user) throw new Error('Not authenticated');
+      return await prisma.user.findUnique({ where: { id: user.userId } });
     },
   },
 
@@ -105,36 +119,57 @@ const resolvers = {
   },
 
   Mutation: {
-    createUser: async (_, args) => {
-      const newUser = await prisma.user.create({
-        data: {
-          name: args.name,
-          email: args.email,
-          password: 'mock-password-hash',
-        },
+    signup: async (_, { name, email, password }) => {
+      // 1. Hash the password
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // 2. Create the user in PostgreSQL
+      const user = await prisma.user.create({
+        data: { name, email, password: hashedPassword },
       });
-      console.log('👤 [Backend Log] Created User in DB:', newUser);
-      return newUser;
+
+      // 3. Generate a JWT token valid for 7 days
+      const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
+        expiresIn: '7d',
+      });
+
+      return { token, user };
     },
 
-    createTask: async (_, args) => {
+    login: async (_, { email, password }) => {
+      // 1. Find user by email
+      const user = await prisma.user.findUnique({ where: email });
+      if (!user) throw new Error('Invalid email or password');
+
+      // 2. Verify password
+      const valid = await bcrypt.compare(password, user.password);
+      if (!valid) throw new Error('Invalid email or password');
+
+      // 3. Generate JWT token
+      const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
+        expiresIn: '7d',
+      });
+
+      return { token, user };
+    },
+
+    createTask: async (_, args, { user }) => {
       console.log('👉 [Backend Log] Incoming createTask mutation args:', args);
+      // 🔒 Protect this mutation so only logged-in users can create tasks!
+      if (!user) throw new Error('Auth required to create task');
 
       const taskData = { title: args.title, status: 'TODO' };
-
       if (args.assigneeId) {
         taskData.assignee = { connect: { id: args.assigneeId } };
       }
 
-      const newTask = await prisma.task.create({ data: taskData });
-      console.log(
-        '📝 [Backend Log] Successfully saved Task to PostgreSQL:',
-        newTask,
-      );
-      return newTask;
+      return prisma.task.update
+        ? await prisma.task.create({ data: taskData })
+        : null;
     },
 
-    updateTaskStatus: async (_, args) => {
+    updateTaskStatus: async (_, args, { user }) => {
+      if (!user) throw new Error('Auth required');
       return await prisma.task.update({
         where: { id: args.id },
         data: { status: args.status },
@@ -150,10 +185,34 @@ const server = new ApolloServer({ typeDefs, resolvers });
 // ==========================================
 const { url } = await startStandaloneServer(server, {
   listen: { port: 4000 },
-  context: async () => ({
-    // This creates a fresh DataLoader instance for every incoming client request
-    ...createLoader(),
-  }),
+  context: async ({ req }) => {
+    // 1. Extract the Authorization header
+    const authHeader = req.headers.authorization || '';
+    console.log('🔍 [Auth Debug] Received Authorization Header:', authHeader);
+
+    let user = null;
+
+    if (authHeader.startsWith('Bearer ')) {
+      const token = authHeader.replace('Bearer ', '');
+      try {
+        // 2. Verify and decode the JWT token
+        user = jwt.verify(token, process.env.JWT_SECRET);
+        console.log('✅ [Auth Debug] Successfully decoded user:', user);
+      } catch (err) {
+        console.log(
+          '❌ [Auth Debug] JWT verification failed with error:',
+          err.message,
+        );
+      }
+    } else {
+      console.log('⚠️ [Auth Debug] Header did not start with "Bearer "');
+    }
+
+    return {
+      ...createLoader(),
+      user, // Pass the decode user info every resolver context!
+    };
+  },
 });
 
 console.log(`🚀 DevPulse Phase 2 Optimized Backend running at: ${url}`);
