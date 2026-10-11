@@ -1,194 +1,311 @@
-// Import React tools to manage local screen states (like loading spinners or list inputs)
+import { gql, type TypedDocumentNode } from '@apollo/client';
+import { Button } from '@/components/ui/button';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { useState } from 'react';
 
-// Import Apollo Client tools to connect to our GraphQL backend
-import {
-  ApolloClient,
-  HttpLink,
-  InMemoryCache,
-  gql,
-  type TypedDocumentNode,
-} from '@apollo/client';
-import { ApolloProvider, useMutation, useQuery } from '@apollo/client/react';
+// --- GraphQL Operations ---
+const GET_MY_DATA: TypedDocumentNode<GetMeData> = gql`
+  query GetMyData {
+    me {
+      id
+      name
+      tasks {
+        id
+        title
+        status
+      }
+    }
+  }
+`;
 
-// ==========================================
-// 1. TYPES & INTERFACES (TypeScript Contracts)
-// ==========================================
-// We define strict blueprints for what a Task looks like so TypeScript can check our spelling and properties.
+const LOGIN_MUTATION: TypedDocumentNode<LoginData, LoginVariables> = gql`
+  mutation Login($email: String!, $password: String!) {
+    login(email: $email, password: $password) {
+      token
+      user {
+        id
+        name
+      }
+    }
+  }
+`;
+
+const SIGNUP_MUTATION: TypedDocumentNode<SignupData, SignupVariables> = gql`
+  mutation Signup($email: String!, $password: String!, $name: String!) {
+    signup(email: $email, password: $password, name: $name) {
+      token
+      user {
+        id
+        name
+      }
+    }
+  }
+`;
+
+// --- TypeScript Interfaces ---
+// 1. Define types for your data structure
 interface Task {
   id: string;
   title: string;
-  status: 'TODO' | 'IN_PROGRESS' | 'DONE'; // Literal union type matching our backend Enum!
+  status: string;
 }
 
-// Define the shape of the data returned by our GET_TASKS query
-interface GetTasksData {
+interface UserProfile {
+  id: string;
+  name: string;
+  email: string;
   tasks: Task[];
 }
 
-// Define the shape of variables and response for the CREATE_TASK mutation
-interface CreateTaskVariables {
-  title: string;
+interface GetMeData {
+  me: UserProfile;
 }
 
-interface CreateTaskData {
-  createTask: Task;
+interface AuthPayload {
+  token: string;
+  user: {
+    id: string;
+    name: string;
+  };
 }
 
-// ==========================================
-// 2. SETUP APOLLO CLIENT (The Waiter)
-// ==========================================
-// This tells Apollo Client where our backend restaurant kitchen is located (http://localhost:4000).
-// InMemoryCache is a smart local storage box that remembers data so the app doesn't have to keep re-downloading it.
-const client = new ApolloClient({
-  link: new HttpLink({ uri: 'http://localhost:4000/' }),
-  cache: new InMemoryCache(),
-});
+interface LoginData {
+  login: AuthPayload;
+}
 
-// ==========================================
-// 3. WRITE GRAPHQL QUERIES & MUTATIONS
-// ==========================================
-// 'gql' is a helper tag that lets us write raw GraphQL syntax inside JavaScript.
+interface SignupData {
+  signup: AuthPayload;
+}
 
-// Query to fetch all tasks from the backend
-const GET_TASKS: TypedDocumentNode<GetTasksData, Record<string, never>> = gql`
-  query GetTasks {
-    tasks {
-      id
-      title
-      status
-    }
-  }
-`;
+// --- Add Variable Interfaces ---
+interface LoginVariables {
+  email: string;
+  password: string;
+}
 
-// Mutation to create a new task on the backend
-const CREATE_TASK: TypedDocumentNode<CreateTaskData, CreateTaskVariables> = gql`
-  mutation CreateTask($title: String!) {
-    createTask(title: $title) {
-      id
-      title
-      status
-    }
-  }
-`;
+interface SignupVariables {
+  email: string;
+  password: string;
+  name: string;
+}
 
-// ==========================================
-// 4. THE UI COMPONENTS
-// ==========================================
+export default function App() {
+  const [isLoginMode, setIsLoginMode] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
 
-function TaskDashboard() {
-  // Local state to keep track of what the user types in the input box
-  const [taskTitle, setTaskTitle] = useState<string>('');
+  // Fetch logged-in user profile & tasks
+  const { loading, error, data } = useQuery(GET_MY_DATA);
+  const typedData = data as GetMeData | undefined;
 
-  // 🛠️ HOOK 1: useQuery
-  // Apollo Client automatically fetches tasks from the backend as soon as this component loads on screen!
-  // It gives us back 'loading' (true/false), 'error' (if server is down), and 'data' (our tasks list).
-  const { loading, error, data } = useQuery(GET_TASKS);
-
-  // 🛠️ HOOK 2: useMutation
-  // This hook gives us a trigger function ('createTask') to send data to the backend,
-  // plus a 'refetchQueries' instruction so the task list automatically updates on screen after creating one!
-  const [createTask, { loading: creating }] = useMutation(CREATE_TASK, {
-    refetchQueries: [{ query: GET_TASKS }],
+  const [login, { loading: loginLoading }] = useMutation(LOGIN_MUTATION, {
+    onCompleted: (res) => {
+      // res.login.token is automatically inferred as string!
+      localStorage.setItem('devpulse_token', res.login.token);
+      window.location.reload();
+    },
+    onError: (err) => setErrorMessage(err.message),
   });
 
-  // Handle form submission when user clicks "Add Task"
+  const [signup, { loading: signupLoading }] = useMutation(SIGNUP_MUTATION, {
+    onCompleted: (res) => {
+      localStorage.setItem('devpulse_token', res.signup.token);
+      window.location.reload();
+    },
+    onError: (err) => setErrorMessage(err.message),
+  });
+
   const handleSubmit = (e: React.SyntheticEvent) => {
     e.preventDefault();
-    if (!taskTitle.trim()) return;
-
-    console.log(
-      '👉 [Frontend Log] Sending mutation to backend with title:',
-      taskTitle,
-    );
-
-    // Call the mutation function with variables
-    createTask({ variables: { title: taskTitle } });
-
-    // Clear the input box
-    setTaskTitle('');
+    setErrorMessage('');
+    if (isLoginMode) {
+      login({ variables: { email, password } });
+    } else {
+      signup({ variables: { email, password, name } });
+    }
   };
 
-  // If the server is still answering, show a simple loading message
-  if (loading)
+  const handleLogout = () => {
+    localStorage.removeItem('devpulse_token');
+    window.location.reload();
+  };
+
+  // If loading user data initially
+  if (loading) {
     return (
-      <p style={{ padding: '20px', fontSize: '18px' }}>
-        Loading tasks from backend kitchen...
-      </p>
+      <div className='min-h-screen bg-slate-50 flex items-center justify-center'>
+        <p className='text-slate-500 animate-pulse'>Loading DevPulse...</p>
+      </div>
     );
+  }
 
-  // If the backend is turned off or broken, show an error message
-  if (error)
+  // If user is NOT logged-in (or token is missing/invalid), show Auth Screen
+  if (error || !typedData?.me) {
     return (
-      <p style={{ padding: '20px', color: 'red' }}>
-        Oops! Could not connect to backend: {error.message}
-      </p>
-    );
+      <div className='min-h-screen bg-slate-50 p-4 flex items-center justify-center'>
+        <div className='max-w-md w-full bg-white rounded-2xl shadow-xl border border-slate-100 p-8 space-y-6'>
+          <div className='text-center space-y-1'>
+            <h1 className='text-3xl font-extrabold text-slate-900 tracking-tight'>
+              DevPulse
+            </h1>
+            <p className='text-sm text-slate-500'>
+              {isLoginMode
+                ? 'Sign in to your workspace'
+                : 'Create your account'}
+            </p>
+          </div>
 
-  return (
-    <div
-      style={{
-        fontFamily: 'sans-serif',
-        maxWidth: '600px',
-        margin: '40px auto',
-        padding: '20px',
-        border: '1px solid #ccc',
-        borderRadius: '8px',
-      }}
-    >
-      <h2>✨ DevPulse Task Dashboard (Phase 1)</h2>
-      <p style={{ color: '#666' }}>
-        This frontend is communicating live with your Node.js GraphQL backend
-        via Apollo Client.
-      </p>
+          {errorMessage && (
+            <div className='p-3 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg text-center'>
+              {errorMessage}
+            </div>
+          )}
 
-      {/* Form to create a new task */}
-      <form
-        onSubmit={handleSubmit}
-        style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}
-      >
-        <input
-          type='text'
-          placeholder='Enter a new task...'
-          value={taskTitle}
-          onChange={(e) => setTaskTitle(e.target.value)}
-          style={{ flex: 1, padding: '8px', fontSize: '16px' }}
-        />
-        <button
-          type='submit'
-          disabled={creating}
-          style={{ padding: '8px 16px', cursor: 'pointer' }}
-        >
-          {creating ? 'Adding...' : 'Add Task'}
-        </button>
-      </form>
+          <form onSubmit={handleSubmit} className='space-y-4'>
+            {!isLoginMode && (
+              <div className='space-y-1'>
+                <label className='text-xs font-semibold text-slate-600 uppercase'>
+                  Full Name
+                </label>
+                <input
+                  type='text'
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder='Jane Doe'
+                  className='w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900'
+                />
+              </div>
+            )}
 
-      {/* List of tasks fetched from GraphQL */}
-      <h3>Current Tasks:</h3>
-      <ul style={{ paddingLeft: '20px' }}>
-        {data?.tasks.map((task) => (
-          <li key={task.id} style={{ marginBottom: '8px' }}>
-            <strong>{task.title}</strong> —{' '}
-            <span
-              style={{ color: task.status === 'DONE' ? 'green' : 'orange' }}
+            <div className='space-y-1'>
+              <label className='text-xs font-semibold text-slate-600 uppercase'>
+                Email Address
+              </label>
+              <input
+                type='email'
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder='you@example.com'
+                className='w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900'
+              />
+            </div>
+
+            <div className='space-y-1'>
+              <label className='text-xs font-semibold text-slate-600 uppercase'>
+                Password
+              </label>
+              <input
+                type='password'
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder='••••••••'
+                className='w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900'
+              />
+            </div>
+
+            <Button
+              type='submit'
+              className='w-full mt-2'
+              disabled={loginLoading || signupLoading}
             >
-              [{task.status}]
+              {isLoginMode
+                ? loginLoading
+                  ? 'Signing in...'
+                  : 'Sign In'
+                : signupLoading
+                  ? 'Creating account...'
+                  : 'Create Account'}
+            </Button>
+          </form>
+
+          <div className='text-center pt-2 border-t border-slate-100'>
+            <button
+              type='button'
+              onClick={() => {
+                setIsLoginMode(!isLoginMode);
+                setErrorMessage('');
+              }}
+              className='text-xs text-slate-600 hover:text-slate-900 font-medium'
+            >
+              {isNeedAccountText(isLoginMode)}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // If user IS logged in, show User-Scoped Dashboard
+  return (
+    <div className='min-h-screen bg-slate-50 p-8 flex flex-col items-center'>
+      <div className='max-w-xl w-full bg-white rounded-2xl shadow-xl border border-slate-100 p-8 space-y-6'>
+        {/* Header & Logout */}
+        <div className='flex justify-between items-center border-b border-slate-100 pb-4'>
+          <div>
+            <h1 className='text-2xl font-bold text-slate-900'>
+              DevPulse Dashboard
+            </h1>
+            <p className='text-xs text-slate-500'>
+              Welcome back, {typedData.me.name} ({typedData.me.email})
+            </p>
+          </div>
+          <Button variant='outline' size='sm' onClick={handleLogout}>
+            Logout
+          </Button>
+        </div>
+
+        {/* User-Scoped Tasks Section */}
+        <div className='space-y-3'>
+          <div className='flex justify-between items-center'>
+            <h2 className='font-semibold text-slate-800 text-sm uppercase tracking-wider'>
+              Your Assigned Tasks
+            </h2>
+            <span className='text-xs font-mono bg-slate-100 px-2 py-1 rounded text-slate-600'>
+              {typedData.me.tasks.length} total
             </span>
-          </li>
-        ))}
-      </ul>
+          </div>
+
+          {typedData.me.tasks.length === 0 ? (
+            <div className='text-center py-10 border-2 border-dashed border-slate-200 rounded-xl space-y-2'>
+              <p className='text-sm text-slate-500'>
+                You don't have any tasks yet.
+              </p>
+              <p className='text-xs text-slate-400'>
+                Create your first task to get started!
+              </p>
+            </div>
+          ) : (
+            <ul className='space-y-2 max-h-80 overflow-y-auto pr-1'>
+              {typedData.me.tasks.map((task: Task) => (
+                <li
+                  key={task.id}
+                  className='p-3 bg-white border border-slate-200 hover:border-slate-300 transition rounded-xl text-sm flex justify-between items-center shadow-xs'
+                >
+                  <span className='font-medium text-slate-700'>
+                    {task.title}
+                  </span>
+                  <span className='font-mono text-xs bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md border border-slate-200'>
+                    {task.status}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <Button className='w-full'>Create New Task 🚀</Button>
+      </div>
     </div>
   );
 }
 
-// ==========================================
-// 4. MAIN APP WRAPPER
-// ==========================================
-// The ApolloProvider wraps our entire app so every child component has access to the Apollo Client "waiter".
-export default function App() {
-  return (
-    <ApolloProvider client={client}>
-      <TaskDashboard />
-    </ApolloProvider>
-  );
+function isNeedAccountText(isLogin: boolean) {
+  return isLogin
+    ? "Don't have an account? Sign up"
+    : 'Already have an account? Sign in';
 }
