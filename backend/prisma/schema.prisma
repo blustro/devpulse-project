@@ -1,0 +1,34 @@
+// This is your Prisma schema file, telling the database what tables to build.
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 1. User Table
+model User {
+  id        String    @id @default(uuid()) // Unique auto-generated ID
+  email     String    @unique
+  name      String
+  password  String    // Stored securely (hashed)
+  tasks     Task[]    // One user can have many assigned tasks
+  createdAt DateTime  @default(now())
+}
+
+// 2. Task Table
+model Task {
+  id          String      @id @default(uuid())
+  title       String
+  status      TaskStatus  @default(TODO)
+  assigneeId  String?     //Foreign key linking to a User
+  assignee    User?       @relation(fields: [assigneeId], references: [id])
+  createdAt   DateTime    @default(now())
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}

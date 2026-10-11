@@ -1,1 +1,56 @@
-node_modules
+# ==========================================
+# DEPENDENCIES
+# ==========================================
+node_modules/
+.pnp/
+.pnp.js
+
+# ==========================================
+# ENVIRONMENT VARIABLES (CRITICAL SECURITY)
+# ==========================================
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# BUILD OUTPUTS & BUNDLES
+# ==========================================
+dist/
+build/
+.vite/
+.cache/
+
+# ==========================================
+# LOGS & DEBUG FILES
+# ==========================================
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+
+# ==========================================
+# OS & ENVIRONMENT JUNK
+# ==========================================
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# IDE & EDITOR FILES
+# ==========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ==========================================
+# AI ASSISTANT / EDITOR LOCAL FOLDERS & SKILLS
+# ==========================================
+.agents/
+.claude/
+.windsurf/
+skills-lock.json
+
+backend/.agents/
+backend/.claude/
+backend/.windsurf/
+backend/skills-lock.json
