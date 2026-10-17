@@ -70,6 +70,7 @@ const typeDefs = `
     login(email: String!, password: String!): AuthPayload!
     createTask(title: String!, assigneeId: ID): Task!
     updateTaskStatus(id: ID!, status: TaskStatus!): Task!
+    deleteTask(id: ID!): Task!
   }
 `;
 
@@ -155,10 +156,19 @@ const resolvers = {
 
     createTask: async (_, args, { user }) => {
       console.log('👉 [Backend Log] Incoming createTask mutation args:', args);
+      console.log('👉 [Backend Log] Current user from context:', user);
+
       // 🔒 Protect this mutation so only logged-in users can create tasks!
       if (!user) throw new Error('Auth required to create task');
 
-      const taskData = { title: args.title, status: 'TODO' };
+      const taskData = {
+        title: args.title,
+        status: 'TODO',
+        assignee: {
+          connect: { id: args.assigneeId || user.userId },
+        },
+      };
+
       if (args.assigneeId) {
         taskData.assignee = { connect: { id: args.assigneeId } };
       }
@@ -174,6 +184,20 @@ const resolvers = {
         where: { id: args.id },
         data: { status: args.status },
       });
+    },
+
+    deleteTask: async (_, { id }, { user }) => {
+      console.log('👉 [Backend Log] Incoming deleteTask mutation for ID:', id);
+      if (!user) throw new Error('Auth required to delete task.');
+
+      // Optional security check: Ensure the task belongs to the logged-in user
+      const task = await prisma.task.findUnique({ where: { id } });
+      if (!task) throw new Error('Task not found.');
+      if (task.assigneeId !== user.userId) {
+        throw new Error('Not authorized to delete this task.');
+      }
+
+      return await prisma.task.delete({ where: { id } });
     },
   },
 };
