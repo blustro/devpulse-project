@@ -1,73 +1,21 @@
-# DevPulse - Phase 1: GraphQL Foundations
+# DevPulse - Phase 2: Frontend Integration & Authentication
 
-Welcome to Phase 1 of DevPulse! This project introduces core GraphQL concepts by building a lightweight task manager from scratch—featuring a Node.js / Apollo Server backend and a TypeScript React frontend connected via Apollo Client.
+This phase bridges our verified PostgreSQL/Prisma/GraphQL backend with a modern, type-safe React frontend.
 
----
+## 🚀 Tech Stack
 
-## 📂 Project Structure
+- **Frontend**: React 19, Vite, TypeScript, Tailwind CSS, shadcn/ui
+- **State & Data Fetching**: Apollo Client (GraphQL)
+- **Security**: JWT-based authentication with automated `localStorage` injection
 
-```text
-graphql-project/
-├── backend/          # Node.js + Apollo Server
-└── frontend/         # React + TypeScript + Vite (Apollo Client)
-````
+## 🛠️ Key Technical Challenges Solved
 
----
+1. **Authenticated Requests**: Configured Apollo Client's `SetContextLink` to dynamically intercept requests and attach the `Authorization: Bearer <token>` header from `localStorage`.
+2. **User Data Isolation**: Migrated from a global task query to a nested `me { tasks }` query to ensure strict multi-tenant data privacy (users only see their own tasks).
+3. **Strict TypeScript & Linting**: Eliminated all `any` types and modern deprecations (`baseUrl`, legacy hook signatures) to maintain a pristine, production-grade build.
 
-## 🛠️ Tech Stack
+## 🏃‍♂️ Running Locally
 
-### Backend
-
-- **Runtime:** Node.js (with ES Modules)
-- **Server Engine:** Apollo Server v4 (`@apollo/server`)
-- **Data Store:** In-memory JavaScript array (RAM)
-
-### Frontend
-
-- **Framework:** React + Vite
-- **Language:** TypeScript
-- **GraphQL Client:** Apollo Client (`@apollo/client`) with strict `TypedDocumentNode` type safety
-
----
-
-## 🚀 How to Run the Project
-
-Since this project has two independent parts (Backend and Frontend), you will run them in **two separate terminal windows**.
-
-### Step 1: Run the Backend
-
-1. Open terminal window #1 and navigate to the backend folder:
-```bash
-cd backend
-```
-
-2. Install dependencies (if you haven't already):
-```bash
-npm install
-```
-
-3. Start the server:
-```bash
-node index.js
-```
-
-4. Your server will run at `http://localhost:4000`. Open this URL in your browser to use the interactive Apollo Sandbox playground.
-
-### Step 2: Run the Frontend
-
-1. Open terminal window #2 and navigate to the frontend folder:
-```bash
-cd frontend
-```
-
-2. Install dependencies (if you haven't already):
-```bash
-npm install
-```
-
-3. Start the server:
-```bash
- npm run dev
-```
-
-4. Open the local URL provided in your terminal (usually `http://localhost:5173`) to view the DevPulse UI dashboard.
+1. Ensure your backend server is running on port 4000.
+2. Run `npm run dev` in the frontend directory.
+3. Sign up for an account to test the authenticated dashboard flow!
