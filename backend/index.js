@@ -1,7 +1,12 @@
+// 🛠️ Bulletproof Node ESM interop for graphql-subscriptions
+import pkg from 'graphql-subscriptions';
+const { PubSub, withFilter } = pkg;
+
+const pubsub = new PubSub(); // Now guaranteed to be a real instance!
+
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { PubSub, withFilter } from 'graphql-subscriptions';
 
 // Resolve __dirname in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -27,8 +32,6 @@ import { PrismaPg } from '@prisma/adapter-pg';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
-
-const pubsub = new PubSub(); // Now guaranteed to be a real instance!
 
 // Define an event constant name to avoid typos later
 const TASK_MUTATED = 'TASK_MUTATED';
@@ -270,7 +273,16 @@ const resolvers = {
         // ⚠️ MUST BE WRAPPED IN AN ARROW FUNCTION: () => ...
         () => pubsub.asyncIterableIterator(['TASK_CREATED']),
         (payload, variables, context) => {
-          flog; // Only push to the WebSocket client if the task belongs to this user
+          console.log(
+            '🔍 WS Filter Check -> Payload User:',
+            payload.taskCreated.userId,
+          );
+          console.log(
+            '🔍 WS Filter Check -> Context User:',
+            context.user?.userId,
+          );
+
+          // Only push to the WebSocket client if the task belongs to this user
           return payload.taskCreated.userId === context.user?.userId;
         },
       ),
