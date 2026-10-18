@@ -1,78 +1,88 @@
-# React + TypeScript + Vite
+# DevPulse ⚡
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+DevPulse is a full-stack, production-grade project management tool designed to give engineering teams a fast, intuitive workspace for task tracking, prioritization, and real-time collaboration.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 🛠️ Tech Stack
 
-## React Compiler
+### **Frontend**
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+- **React 19** – UI library
+- **Apollo Client** – GraphQL data fetching and local cache management
+- **Tailwind CSS** – Utility-first styling
+- **shadcn/ui & Radix UI** – Accessible component primitives
+- **Lucide React** – Clean vector icons
 
-Note: This will impact Vite dev & build performances.
-You can also try [the experimental native React Compiler support in plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler) by using `compiler: true` in the plugin options instead of using the Babel plugin.
+### **Backend**
 
-## Expanding the ESLint configuration
+- **Node.js & Apollo Server** – GraphQL API server
+- **PostgreSQL** – Relational database
+- **Prisma ORM** – Type-safe database client and migrations
+- **JSON Web Tokens (JWT)** – Secure user authentication and session management
+- **Dataloader** – Batching and caching for efficient database relations
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+---
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## ✨ Features & Milestones Completed
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+### **Phase 1 & 2: Architecture & Authentication**
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+- Secure user signup and login flow with hashed passwords (`bcrypt`) and JWT session validation.
+- Database relations connecting users directly to their assigned tasks for strict data isolation.
+- Optimized database queries using DataLoader to prevent N+1 performance bottlenecks.
 
+### **Phase 3: Enhanced CRUD & Polish (`phase-3-edit-mode`)**
+
+- **Comprehensive Task Management:** Create, read, update, and delete user-scoped tasks seamlessly.
+- **Rich Task Metadata:** Tasks now support multi-line **Descriptions** and distinct **Priorities** (`LOW`, `MEDIUM`, `HIGH`).
+- **Advanced Modals & Controls:** Integrated custom shadcn Dialog modals for both task creation and editing, alongside clean dropdown selectors for status and priority changes.
+- **Unified Mutations:** Flexible backend `updateTask` mutation handling partial updates across multiple fields simultaneously.
+
+---
+
+## 🚀 Getting Started
+
+### **1. Clone the Repository**
+
+```bash
+git clone <your-repository-url>
+cd graphql-project
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+### **2. Environment Setup**
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Create a `.env` file in your root directory and configure your PostgreSQL connection string and JWT secret:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```env
+DATABASE_URL="postgresql://user:password@localhost:5432/devpulse?schema=public"
+JWT_SECRET="your_super_secret_jwt_key"
 ```
+
+### **3. Database Migration & Generation**
+
+Run Prisma commands to push your schema to PostgreSQL and generate the client:
+
+```bash
+npx prisma db push
+npx prisma generate
+```
+
+### **4. Run the Application**
+
+Start your backend server and React development client:
+
+```bash
+# Start backend
+node backend/index.js
+
+# Start frontend (in a separate terminal)
+npm run dev
+```
+
+---
+
+## 🗺️ Roadmap
+
+- **Phase 4:** Real-time task tracking with GraphQL Subscriptions and user presence indicators.
+- **Phase 5:** Kanban board column views and team workspace invitations.
