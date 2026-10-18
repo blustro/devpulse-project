@@ -1,10 +1,10 @@
-// This is your Prisma schema file, telling the database what tables to build.
 datasource db {
   provider = "postgresql"
 }
 
 generator client {
   provider = "prisma-client-js"
+  output   = "./generated/prisma"
 }
 
 enum TaskStatus {

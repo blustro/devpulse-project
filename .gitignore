@@ -54,3 +54,5 @@ backend/.agents/
 backend/.claude/
 backend/.windsurf/
 backend/skills-lock.json
+
+backend/prisma/generated
