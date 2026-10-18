@@ -1,45 +1,40 @@
-import {
-  ApolloClient,
-  InMemoryCache,
-  ApolloLink,
-  HttpLink,
-} from '@apollo/client';
-import { setContext } from '@apollo/client/link/context';
+import { ApolloClient, InMemoryCache, HttpLink, split } from '@apollo/client';
 import { GraphQLWsLink } from '@apollo/client/link/subscriptions';
 import { createClient } from 'graphql-ws';
 import { getMainDefinition } from '@apollo/client/utilities';
 
-// 1. HTTP link for Queries and Mutations
 const httpLink = new HttpLink({
   uri: 'http://localhost:4000/graphql',
+  headers: {
+    authorization: localStorage.getItem('devpulse_token')
+      ? `Bearer ${localStorage.getItem('devpulse_token')}`
+      : '',
+  },
 });
 
-// 2. Auth link to automatically attach devpulse_token to HTTP requests
-const authLink = setContext((_, { headers }) => {
-  const token = localStorage.getItem('devpulse_token');
-  return {
-    headers: {
-      ...headers,
+// ✨ Enhanced WebSocket client with debug logging
+const wsClient = createClient({
+  url: 'ws://localhost:4000/graphql',
+  connectionParams: () => {
+    const token = localStorage.getItem('devpulse_token');
+    return {
       authorization: token ? `Bearer ${token}` : '',
-    },
-  };
+    };
+  },
+  on: {
+    connected: () =>
+      console.log('🟢 [WebSocket]: Connected successfully to server!'),
+    closed: (event) => console.log('🔴 [WebSocket]: Connection closed', event),
+    error: (err) => console.error('⚠️ [WebSocket]: Connection error', err),
+
+    // 🔍 ADD THIS: Logs every incoming/outgoing frame (including subscription requests & errors)
+    message: (message) => console.log('📥 [WebSocket Raw Frame]:', message),
+  },
 });
 
-// 3. WebSocket link with connectionParams for real-time subscriptions
-const wsLink = new GraphQLWsLink(
-  createClient({
-    url: 'ws://localhost:4000/graphql',
-    connectionParams: () => {
-      const token = localStorage.getItem('devpulse_token');
-      return {
-        authorization: token ? `Bearer ${token}` : '',
-      };
-    },
-  }),
-);
+const wsLink = new GraphQLWsLink(wsClient);
 
-// 4. Route traffic: Subscriptions go to WebSockets, Queries/Mutations go through auth + http
-const splitLink = ApolloLink.split(
+const splitLink = split(
   ({ query }) => {
     const definition = getMainDefinition(query);
     return (
@@ -48,10 +43,9 @@ const splitLink = ApolloLink.split(
     );
   },
   wsLink,
-  authLink.concat(httpLink),
+  httpLink,
 );
 
-// 5. Export the configured client
 export const client = new ApolloClient({
   link: splitLink,
   cache: new InMemoryCache(),
