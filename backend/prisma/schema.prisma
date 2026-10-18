@@ -7,6 +7,18 @@ generator client {
   provider = "prisma-client-js"
 }
 
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
 // 1. User Table
 model User {
   id        String    @id @default(uuid()) // Unique auto-generated ID
@@ -19,16 +31,13 @@ model User {
 
 // 2. Task Table
 model Task {
-  id          String      @id @default(uuid())
+  id          String        @id @default(uuid())
   title       String
-  status      TaskStatus  @default(TODO)
-  assigneeId  String?     //Foreign key linking to a User
-  assignee    User?       @relation(fields: [assigneeId], references: [id])
-  createdAt   DateTime    @default(now())
+  description String?
+  status      TaskStatus    @default(TODO)
+  priority    TaskPriority  @default(MEDIUM)
+  assigneeId  String?       //Foreign key linking to a User
+  assignee    User?         @relation(fields: [assigneeId], references: [id])
+  createdAt   DateTime      @default(now())
 }
 
-enum TaskStatus {
-  TODO
-  IN_PROGRESS
-  DONE
-}

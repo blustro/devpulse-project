@@ -20,7 +20,7 @@
     "graphql": "^16.14.2",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.1",
-    "prisma": "^6.19.3"
+    "prisma": "^7.10.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",

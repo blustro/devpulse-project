@@ -39,6 +39,12 @@ const typeDefs = `
     IN_PROGRESS
     DONE
   }
+  
+  enum TaskPriority {
+    LOW
+    MEDIUM
+    HIGH
+  }
 
   type User {
     id: ID!
@@ -50,7 +56,9 @@ const typeDefs = `
   type Task {
     id: ID!
     title: String!
+    description: String
     status: TaskStatus!
+    priority: TaskPriority!
     assignee: User
   }
 
@@ -68,8 +76,8 @@ const typeDefs = `
   type Mutation {
     signup(name: String!, email: String!, password: String!): AuthPayload!
     login(email: String!, password: String!): AuthPayload!
-    createTask(title: String!, assigneeId: ID): Task!
-    updateTaskStatus(id: ID!, status: TaskStatus!): Task!
+    createTask(title: String!, description: String, priority: TaskPriority, assigneeId: ID): Task!
+    updateTask(id: ID!, title: String, description: String, status: TaskStatus, priority: TaskPriority): Task!
     deleteTask(id: ID!): Task!
   }
 `;
@@ -163,7 +171,9 @@ const resolvers = {
 
       const taskData = {
         title: args.title,
+        descritption: args.descritption || null,
         status: 'TODO',
+        priority: args.priority || 'MEDIUM',
         assignee: {
           connect: { id: args.assigneeId || user.userId },
         },
@@ -178,11 +188,25 @@ const resolvers = {
         : null;
     },
 
-    updateTaskStatus: async (_, args, { user }) => {
+    updateTask: async (_, args, { user }) => {
       if (!user) throw new Error('Auth required');
+
+      // Optional: Verify task ownership before updating
+      const task = await prisma.task.findUnique({ where: { id: args.id } });
+      if (!task) throw new Error('Task not found');
+      if (task.assigneeId !== user.userId)
+        throw new Error('Not authorized to update this task');
+
+      const updateData = {};
+      if (args.title !== undefined) updateData.title = args.title;
+      if (args.description !== undefined)
+        updateData.description = args.description;
+      if (args.status !== undefined) updateData.status = args.status;
+      if (args.priority !== undefined) updateData.priority = args.priority;
+
       return await prisma.task.update({
         where: { id: args.id },
-        data: { status: args.status },
+        data: updateData,
       });
     },
 
