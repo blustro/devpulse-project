@@ -1,50 +1,38 @@
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Resolve __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Explicitly load the .env file from the root directory
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
+import express from 'express';
+import { createServer } from 'http';
+import { WebSocketServer } from 'ws';
+import { useServer } from 'graphql-ws/use/ws'; // Bridges WebSockets with GraphQL protocol
+import { makeExecutableSchema } from '@graphql-tools/schema'; // Compiles typeDefs & resolvers into an executable schema
 import { ApolloServer } from '@apollo/server';
-import { startStandaloneServer } from '@apollo/server/standalone';
-import { PrismaPg } from '@prisma/adapter-pg';
-import pkg from '@prisma/client';
+import { expressMiddleware } from '@as-integrations/express5';
+import { ApolloServerPluginDrainHttpServer } from '@apollo/server/plugin/drainHttpServer';
+import { PubSub } from 'graphql-subscriptions';
+import cors from 'cors';
 import bcrypt from 'bcrypt';
-import DataLoader from 'dataloader';
-import 'dotenv/config';
 import jwt from 'jsonwebtoken';
-const { PrismaClient } = pkg;
+import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
+const pubsub = new PubSub(); // Initialize our global event publisher / subscriber
+// Define an event constant name to avoid typos later
+const TASK_MUTATED = 'TASK_MUTATED';
 
-// ==========================================
-// 🧠 1. CREATE THE USER DATALOADER
-// ==========================================
-// This function batches multiple user ID requests into a single database query.
-const createLoader = () => ({
-  userLoader: new DataLoader(async (userIds) => {
-    console.log(
-      `🚀 [DataLoader Batch Log] Batching ${userIds.length} user IDs into ONE single SQL query!`,
-      userIds,
-    );
-
-    // Fetch all users whose IDs match the requested list in one single query
-    const users = await prisma.user.findMany({
-      where: { id: { in: userIds } },
-    });
-
-    // DataLoader requires the returned array to match the exact order of the requested userIds
-    const userMap = new Map(users.map((user) => [user.id, user]));
-    return userIds.map((id) => userMap.get(id) || null);
-  }),
-});
-
-const typeDefs = `
-  enum TaskStatus {
-    TODO
-    IN_PROGRESS
-    DONE
-  }
-  
-  enum TaskPriority {
-    LOW
-    MEDIUM
-    HIGH
-  }
+const typeDefs = `#graphql
+  enum TaskStatus { TODO, IN_PROGRESS, DONE }
+  enum TaskPriority { LOW, MEDIUM, HIGH }
 
   type User {
     id: ID!
@@ -80,6 +68,15 @@ const typeDefs = `
     updateTask(id: ID!, title: String, description: String, status: TaskStatus, priority: TaskPriority): Task!
     deleteTask(id: ID!): Task!
   }
+
+  type Subscription {
+    taskMutated: TaskPayload!
+  }
+
+  type TaskPayload {
+    mutation: String! #e.g., 'CREATED', 'UPDATED', 'DELETED'
+    task: Task!
+  }
 `;
 
 const resolvers = {
@@ -94,7 +91,8 @@ const resolvers = {
     },
     // Protected query to get the currently logged-in user
     me: async (_, __, { user }) => {
-      if (!user) throw new Error('Not authenticated');
+      // Return null quietly when logged out instead of throwing an error
+      if (!user) return null;
       return await prisma.user.findUnique({ where: { id: user.userId } });
     },
   },
@@ -115,7 +113,9 @@ const resolvers = {
       console.log(
         `✅ [Debug]: Found assigneeId "${parent.assigneeId}". Loading via DataLoader...`,
       );
-      return userLoader.load(parent.assigneeId);
+      return userLoader
+        ? userLoader.load(parent.assigneeId)
+        : prisma.user.findUnique({ where: { id: parent.assigneeId } });
     },
   },
 
@@ -129,14 +129,10 @@ const resolvers = {
 
   Mutation: {
     signup: async (_, { name, email, password }) => {
-      // 1. Hash the password
       const hashedPassword = await bcrypt.hash(password, 10);
-
-      // 2. Create the user in PostgreSQL
       const user = await prisma.user.create({
         data: { name, email, password: hashedPassword },
       });
-
       // 3. Generate a JWT token valid for 7 days
       const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
         expiresIn: '7d',
@@ -146,15 +142,13 @@ const resolvers = {
     },
 
     login: async (_, { email, password }) => {
-      // 1. Find user by email
-      const user = await prisma.user.findUnique({ where: email });
+      // FIXED: Wrap email in an object { email }
+      const user = await prisma.user.findUnique({ where: { email } });
       if (!user) throw new Error('Invalid email or password');
 
-      // 2. Verify password
       const valid = await bcrypt.compare(password, user.password);
       if (!valid) throw new Error('Invalid email or password');
 
-      // 3. Generate JWT token
       const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
         expiresIn: '7d',
       });
@@ -171,21 +165,26 @@ const resolvers = {
 
       const taskData = {
         title: args.title,
-        descritption: args.descritption || null,
+        description: args.description || null,
         status: 'TODO',
         priority: args.priority || 'MEDIUM',
-        assignee: {
-          connect: { id: args.assigneeId || user.userId },
-        },
+        assigneeId: args.assigneeId || user.userId,
       };
 
-      if (args.assigneeId) {
-        taskData.assignee = { connect: { id: args.assigneeId } };
-      }
+      const newTask = await prisma.task.create({
+        data: taskData,
+        include: { assignee: true },
+      });
 
-      return prisma.task.update
-        ? await prisma.task.create({ data: taskData })
-        : null;
+      // 📻 Broadcast CREATED event
+      pubsub.publish(TASK_MUTATED, {
+        taskMutated: {
+          mutation: 'CREATED',
+          task: newTask,
+        },
+      });
+
+      return newTask;
     },
 
     updateTask: async (_, args, { user }) => {
@@ -197,17 +196,28 @@ const resolvers = {
       if (task.assigneeId !== user.userId)
         throw new Error('Not authorized to update this task');
 
-      const updateData = {};
-      if (args.title !== undefined) updateData.title = args.title;
-      if (args.description !== undefined)
-        updateData.description = args.description;
-      if (args.status !== undefined) updateData.status = args.status;
-      if (args.priority !== undefined) updateData.priority = args.priority;
-
-      return await prisma.task.update({
+      const updatedTask = await prisma.task.update({
         where: { id: args.id },
-        data: updateData,
+        data: {
+          ...(args.title !== undefined && { title: args.title }),
+          ...(args.description !== undefined && {
+            description: args.description,
+          }),
+          ...(args.status !== undefined && { status: args.status }),
+          ...(args.priority !== undefined && { priority: args.priority }),
+        },
+        include: { assignee: true },
       });
+
+      // 📻 BROADCAST UPDATED EVENT!
+      pubsub.publish(TASK_MUTATED, {
+        taskMutated: {
+          mutation: 'UPDATED',
+          task: updatedTask,
+        },
+      });
+
+      return updatedTask;
     },
 
     deleteTask: async (_, { id }, { user }) => {
@@ -221,46 +231,92 @@ const resolvers = {
         throw new Error('Not authorized to delete this task.');
       }
 
-      return await prisma.task.delete({ where: { id } });
+      const deletedTask = await prisma.task.delete({
+        where: { id },
+        include: { assignee: true },
+      });
+
+      // 📻 Broadcast DELETED event
+      pubsub.publish(TASK_MUTATED, {
+        taskMutated: {
+          mutation: 'DELETED',
+          task: deletedTask,
+        },
+      });
+
+      return deletedTask;
+    },
+  },
+  // 🚀 NEW: Subscription Resolvers
+  Subscription: {
+    taskMutated: {
+      subscribe: () => pubsub.asyncIterator([TASK_MUTATED]),
     },
   },
 };
 
-const server = new ApolloServer({ typeDefs, resolvers });
+// --- SERVER INITIALIZATION (HTTP + WebSockets) ---
+const app = express();
+const httpServer = createServer(app);
 
-// ==========================================
-// 🔌 2. PASS DATALOADER INTO CONTEXT PER REQUEST
-// ==========================================
-const { url } = await startStandaloneServer(server, {
-  listen: { port: 4000 },
-  context: async ({ req }) => {
-    // 1. Extract the Authorization header
-    const authHeader = req.headers.authorization || '';
-    console.log('🔍 [Auth Debug] Received Authorization Header:', authHeader);
+// 1. Create a unified executable GraphQL schema
+const schema = makeExecutableSchema({ typeDefs, resolvers });
 
-    let user = null;
-
-    if (authHeader.startsWith('Bearer ')) {
-      const token = authHeader.replace('Bearer ', '');
-      try {
-        // 2. Verify and decode the JWT token
-        user = jwt.verify(token, process.env.JWT_SECRET);
-        console.log('✅ [Auth Debug] Successfully decoded user:', user);
-      } catch (err) {
-        console.log(
-          '❌ [Auth Debug] JWT verification failed with error:',
-          err.message,
-        );
-      }
-    } else {
-      console.log('⚠️ [Auth Debug] Header did not start with "Bearer "');
-    }
-
-    return {
-      ...createLoader(),
-      user, // Pass the decode user info every resolver context!
-    };
-  },
+// 2. Set up the WebSocket Server on a specific path (/graphql)
+const wsServer = new WebSocketServer({
+  server: httpServer,
+  path: '/graphql',
 });
 
-console.log(`🚀 DevPulse Phase 2 Optimized Backend running at: ${url}`);
+// 3. Register the graphql-ws server handler
+const serverCleanup = useServer({ schema }, wsServer);
+
+// 4. Initialize Apollo Server with plugin hooks for graceful shutdown
+const server = new ApolloServer({
+  schema,
+  plugins: [
+    ApolloServerPluginDrainHttpServer({ httpServer }), // Drain HTTP on exit
+    {
+      async serverWillStart() {
+        return {
+          async drainServer() {
+            await serverCleanup.dispose(); // Drain WebSocket connections on exit
+          },
+        };
+      },
+    },
+  ],
+});
+
+await server.start();
+
+// Apply standard Express middleware for HTTP queries & mutations
+app.use(
+  '/graphql',
+  cors(),
+  express.json(),
+  expressMiddleware(server, {
+    context: async ({ req }) => {
+      // Extract JWT token from headers for authentication
+      const token = req.headers.authorization || '';
+      try {
+        const user = jwt.verify(
+          token.replace('Bearer ', ''),
+          process.env.JWT_SECRET,
+        );
+        return { user };
+      } catch (e) {
+        return { user: null };
+      }
+    },
+  }),
+);
+
+// Start listening using the wrapped HTTP server (handles BOTH HTTP and WS!)
+const PORT = 4000;
+httpServer.listen(PORT, () => {
+  console.log(`🚀 HTTP Server ready at http://localhost:${PORT}/graphql`);
+  console.log(
+    `🔌 WebSocket Subscriptions ready at ws://localhost:${PORT}/graphql`,
+  );
+});
