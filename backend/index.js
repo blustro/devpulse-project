@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { PubSub, withFilter } from 'graphql-subscriptions';
 
 // Resolve __dirname in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -10,23 +11,25 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 import express from 'express';
-import { createServer } from 'http';
+import http from 'http';
 import { WebSocketServer } from 'ws';
 import { useServer } from 'graphql-ws/use/ws'; // Bridges WebSockets with GraphQL protocol
 import { makeExecutableSchema } from '@graphql-tools/schema'; // Compiles typeDefs & resolvers into an executable schema
 import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@as-integrations/express5';
-import { ApolloServerPluginDrainHttpServer } from '@apollo/server/plugin/drainHttpServer';
-import { PubSub } from 'graphql-subscriptions';
 import cors from 'cors';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+
+import DataLoader from 'dataloader';
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
-const pubsub = new PubSub(); // Initialize our global event publisher / subscriber
+
+const pubsub = new PubSub(); // Now guaranteed to be a real instance!
+
 // Define an event constant name to avoid typos later
 const TASK_MUTATED = 'TASK_MUTATED';
 
@@ -47,6 +50,8 @@ const typeDefs = `#graphql
     description: String
     status: TaskStatus!
     priority: TaskPriority!
+    userId: ID!
+    assigneeId: ID
     assignee: User
   }
 
@@ -70,7 +75,7 @@ const typeDefs = `#graphql
   }
 
   type Subscription {
-    taskMutated: TaskPayload!
+    taskCreated: Task!
   }
 
   type TaskPayload {
@@ -93,7 +98,11 @@ const resolvers = {
     me: async (_, __, { user }) => {
       // Return null quietly when logged out instead of throwing an error
       if (!user) return null;
-      return await prisma.user.findUnique({ where: { id: user.userId } });
+
+      return await prisma.user.findUnique({
+        where: { id: user.userId },
+        include: { tasks: true }, // 👈 This fetches and populates user.tasks!
+      });
     },
   },
 
@@ -156,33 +165,40 @@ const resolvers = {
       return { token, user };
     },
 
-    createTask: async (_, args, { user }) => {
-      console.log('👉 [Backend Log] Incoming createTask mutation args:', args);
-      console.log('👉 [Backend Log] Current user from context:', user);
+    createTask: async (_, args, { user, prisma, pubsub }) => {
+      // 1. Ensure user is authenticated
+      if (!user) {
+        throw new Error('Not authenticated');
+      }
 
-      // 🔒 Protect this mutation so only logged-in users can create tasks!
-      if (!user) throw new Error('Auth required to create task');
+      // 2. Destructure fields from args safely
+      const { title, description, priority } = args;
 
-      const taskData = {
-        title: args.title,
-        description: args.description || null,
-        status: 'TODO',
-        priority: args.priority || 'MEDIUM',
-        assigneeId: args.assigneeId || user.userId,
-      };
-
+      // 3. Create the task in Prisma
       const newTask = await prisma.task.create({
-        data: taskData,
-        include: { assignee: true },
-      });
-
-      // 📻 Broadcast CREATED event
-      pubsub.publish(TASK_MUTATED, {
-        taskMutated: {
-          mutation: 'CREATED',
-          task: newTask,
+        data: {
+          title,
+          description,
+          priority: priority || 'MEDIUM',
+          status: 'TODO',
+          assignee: {
+            // 👈 Matches the error hint
+            connect: { id: user.userId },
+          },
         },
       });
+
+      // ⚠️ Ensure 'userId' is explicitly mapped here so filters can read it!
+      const taskPayload = {
+        ...newTask,
+        userId: user.userId,
+      };
+
+      console.log('🚀 Publishing TASK_CREATED for user:', user.userId);
+
+      // 4. Publish the event for your WebSocket subscriptions!
+      // (Make sure your PubSub trigger name matches what your subscription listens to)
+      pubsub.publish('TASK_CREATED', { taskCreated: taskPayload });
 
       return newTask;
     },
@@ -249,18 +265,25 @@ const resolvers = {
   },
   // 🚀 NEW: Subscription Resolvers
   Subscription: {
-    taskMutated: {
-      subscribe: () => pubsub.asyncIterator([TASK_MUTATED]),
+    taskCreated: {
+      subscribe: withFilter(
+        // ⚠️ MUST BE WRAPPED IN AN ARROW FUNCTION: () => ...
+        () => pubsub.asyncIterableIterator(['TASK_CREATED']),
+        (payload, variables, context) => {
+          flog; // Only push to the WebSocket client if the task belongs to this user
+          return payload.taskCreated.userId === context.user?.userId;
+        },
+      ),
     },
   },
 };
 
 // --- SERVER INITIALIZATION (HTTP + WebSockets) ---
-const app = express();
-const httpServer = createServer(app);
-
 // 1. Create a unified executable GraphQL schema
 const schema = makeExecutableSchema({ typeDefs, resolvers });
+
+const app = express();
+const httpServer = http.createServer(app);
 
 // 2. Set up the WebSocket Server on a specific path (/graphql)
 const wsServer = new WebSocketServer({
@@ -268,14 +291,46 @@ const wsServer = new WebSocketServer({
   path: '/graphql',
 });
 
+// Function to create fresh DataLoaders per request/connection
+const createUserLoader = () =>
+  new DataLoader(async (userIds) => {
+    const users = await prisma.user.findMany({
+      where: { id: { in: [...userIds] } },
+    });
+    const userMap = new Map(users.map((u) => [u.id, u]));
+    return userIds.map((id) => userMap.get(id) || null);
+  });
+
 // 3. Register the graphql-ws server handler
-const serverCleanup = useServer({ schema }, wsServer);
+const serverCleanup = useServer(
+  {
+    schema,
+    context: async (ctx) => {
+      const authHeader = ctx.connectionParams?.authorization || '';
+      // 🛠️ Safely strip 'Bearer' AND trim any leftover whitespace
+      const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+      const userLoader = createUserLoader();
+
+      let user = null;
+      if (token) {
+        try {
+          user = jwt.verify(token, process.env.JWT_SECRET);
+        } catch (err) {
+          console.error('⚠️ Invalid WebSocket JWT token:', err.message);
+        }
+      }
+
+      // ⚠️ Always return pubsub and user (even if null) so context never breaks!
+      return { user, prisma, userLoader, pubsub };
+    },
+  },
+  wsServer,
+);
 
 // 4. Initialize Apollo Server with plugin hooks for graceful shutdown
 const server = new ApolloServer({
   schema,
   plugins: [
-    ApolloServerPluginDrainHttpServer({ httpServer }), // Drain HTTP on exit
     {
       async serverWillStart() {
         return {
@@ -297,16 +352,16 @@ app.use(
   express.json(),
   expressMiddleware(server, {
     context: async ({ req }) => {
-      // Extract JWT token from headers for authentication
-      const token = req.headers.authorization || '';
+      const authHeader = req.headers.authorization || '';
+      const token = authHeader.replace('Bearer ', '');
+      const userLoader = createUserLoader();
+
+      if (!token) return { user: null, prisma };
       try {
-        const user = jwt.verify(
-          token.replace('Bearer ', ''),
-          process.env.JWT_SECRET,
-        );
-        return { user };
-      } catch (e) {
-        return { user: null };
+        const user = jwt.verify(token, process.env.JWT_SECRET);
+        return { user, prisma, userLoader, pubsub };
+      } catch {
+        return { user: null, prisma };
       }
     },
   }),
